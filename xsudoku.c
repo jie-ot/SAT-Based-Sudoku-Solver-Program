@@ -1,5 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
-#include"sudoku.h"
+#include"xsudoku.h"
 
 //内部共享的全局数组，用于回溯构建数独解
 static int full[N][N];
@@ -9,14 +9,15 @@ static inline int var_to_num(int i, int j, int n)
 {
 	return (i - 1) * 81 + (j - 1) * 9 + n;
 }
-// 将一个81字符的数独转换成cnf并写入cnf_path，成功返回 true，否则返回 false
-bool sudoku_to_cnf(const char* sudoku_str, const char* cnf_path)
+
+//将一个81字符的百分号数独转换成cnf并写入cnf_path，成功返回1，否则返回0
+bool xsudoku_to_cnf(const char* xsudoku_str, const char* cnf_path)
 {
-	if (!sudoku_str || !cnf_path) return false;
+	if (!xsudoku_str || !cnf_path) return false;
 
 	//校验输入长度与字符
 	for (int k = 0; k < SUDOKU_LENGTH; ++k) {
-		char c = sudoku_str[k];
+		char c = xsudoku_str[k];
 		if (c == '\0') return false; // 输入长度不足
 		else if (c == '.' || c == '0' || c == '-') { /* 空格 */ }
 		else return false; // 非法字符
@@ -25,13 +26,11 @@ bool sudoku_to_cnf(const char* sudoku_str, const char* cnf_path)
 	FILE* fp = fopen(cnf_path, "wb");
 	if (!fp) return false;
 
-	// 先写占位 header（clauses 字段用固定宽度 10，以便之后安全覆盖）
-	if (fprintf(fp, "p cnf %d %10d\n", VAR_NUM, 0) < 0) { fclose(fp); return false; }
+	fprintf(fp, "p cnf %d %10d\n", VAR_NUM, 0);
 	fflush(fp);
 
 	int clauses = 0;
-
-	// 1) 每格至少一个数 (81 条)
+	//cnf公式限制条件1：每格至少一个数
 	for (int i = 1; i <= 9; i++) {
 		for (int j = 1; j <= 9; j++) {
 			for (int n = 1; n <= 9; n++) {
@@ -41,16 +40,14 @@ bool sudoku_to_cnf(const char* sudoku_str, const char* cnf_path)
 			clauses++;
 		}
 	}
-
-	// 2) 每格至多一个数 (每格 C(9,2)=36 条，共 2916 条)
+	//cnf公式限制条件2：每格至多一个数
 	for (int i = 1; i <= 9; i++) for (int j = 1; j <= 9; j++) {
 		for (int a = 1; a <= 9; a++) for (int b = a + 1; b <= 9; b++) {
 			fprintf(fp, "-%d -%d 0\n", var_to_num(i, j, a), var_to_num(i, j, b));
 			clauses++;
 		}
 	}
-
-	// 3) 行不重复：每行每数至少一个（9*9 条） + 每行每数两两互斥（9*9*36 条）
+	//cnf公式限制条件3：行不重复
 	for (int i = 1; i <= 9; i++) for (int n = 1; n <= 9; n++) {
 		for (int j = 1; j <= 9; j++) fprintf(fp, "%d ", var_to_num(i, j, n));
 		fprintf(fp, "0\n"); clauses++;
@@ -59,8 +56,7 @@ bool sudoku_to_cnf(const char* sudoku_str, const char* cnf_path)
 			clauses++;
 		}
 	}
-
-	// 4) 列不重复：每列每数至少一个 + 每列每数两两互斥
+	//cnf公式限制条件4：列不重复
 	for (int j = 1; j <= 9; j++) for (int n = 1; n <= 9; n++) {
 		for (int i = 1; i <= 9; i++) fprintf(fp, "%d ", var_to_num(i, j, n));
 		fprintf(fp, "0\n"); clauses++;
@@ -69,16 +65,15 @@ bool sudoku_to_cnf(const char* sudoku_str, const char* cnf_path)
 			clauses++;
 		}
 	}
-
-	// 5) 3x3 宫内不重复：每宫每数至少一个 + 每宫每数两两互斥
+	//cnf公式限制条件5：九宫格内不重复	
 	for (int bi = 0; bi < 3; bi++) for (int bj = 0; bj < 3; bj++) {
 		for (int n = 1; n <= 9; n++) {
-			// 至少一个
+			//至少一个
 			for (int di = 1; di <= 3; di++) for (int dj = 1; dj <= 3; dj++) {
 				fprintf(fp, "%d ", var_to_num(bi * 3 + di, bj * 3 + dj, n));
 			}
 			fprintf(fp, "0\n"); clauses++;
-			// 至多一个
+			//至多一个
 			int idx = 0, cells[9][2];
 			for (int di = 1; di <= 3; di++) for (int dj = 1; dj <= 3; dj++) {
 				cells[idx][0] = bi * 3 + di; cells[idx++][1] = bj * 3 + dj;
@@ -89,28 +84,83 @@ bool sudoku_to_cnf(const char* sudoku_str, const char* cnf_path)
 			}
 		}
 	}
-
-	// 6) 输入字符串中的已知线索（每个线索一条子句）
+	//cnf公式限制条件6：sudoku_str中的已知线索
 	for (int k = 0; k < SUDOKU_LENGTH; k++) {
-		char c = sudoku_str[k];
+		char c = xsudoku_str[k];
 		if (c >= '1' && c <= '9') {
 			int i = k / 9 + 1, j = k % 9 + 1, n = c - '0';
-			fprintf(fp, "%d 0\n", var_to_num(i, j, n));
-			clauses++;
+			fprintf(fp, "%d 0\n", var_to_num(i, j, n)); clauses++;
+		}
+	}
+	//cnf公式限制条件7：百分号内不重复
+	int diag_i[9] = { 1,2,3,4,5,6,7,8,9 };
+	int diag_j[9] = { 9,8,7,6,5,4,3,2,1 };
+	for (int n = 1; n <= 9; n++) {
+		// 至少一个
+		for (int k = 0; k < 9; k++) {
+			fprintf(fp, "%d ", var_to_num(diag_i[k], diag_j[k], n));
+		}
+		fprintf(fp, "0\n");
+		clauses++;
+		// 至多一个
+		for (int x = 0; x < 9; x++) {
+			for (int y = x + 1; y < 9; y++) {
+				fprintf(fp, "-%d -%d 0\n",
+					var_to_num(diag_i[x], diag_j[x], n),
+					var_to_num(diag_i[y], diag_j[y], n));
+				clauses++;
+			}
+		}
+	}
+	int up_i[9] = { 2,2,2,3,3,3,4,4,4 };
+	int up_j[9] = { 2,3,4,2,3,4,2,3,4 };
+	for (int n = 1; n <= 9; n++) {
+		// 至少一个
+		for (int k = 0; k < 9; k++) {
+			fprintf(fp, "%d ", var_to_num(up_i[k], up_j[k], n));
+		}
+		fprintf(fp, "0\n");
+		clauses++;
+		// 至多一个
+		for (int x = 0; x < 9; x++) {
+			for (int y = x + 1; y < 9; y++) {
+				fprintf(fp, "-%d -%d 0\n",
+					var_to_num(up_i[x], up_j[x], n),
+					var_to_num(up_i[y], up_j[y], n));
+				clauses++;
+			}
+		}
+	}
+	int down_i[9] = { 6,6,6,7,7,7,8,8,8 };
+	int down_j[9] = { 6,7,8,6,7,8,6,7,8 };
+	for (int n = 1; n <= 9; n++) {
+		// 至少一个
+		for (int k = 0; k < 9; k++) {
+			fprintf(fp, "%d ", var_to_num(down_i[k], down_j[k], n));
+		}
+		fprintf(fp, "0\n");
+		clauses++;
+		// 至多一个
+		for (int x = 0; x < 9; x++) {
+			for (int y = x + 1; y < 9; y++) {
+				fprintf(fp, "-%d -%d 0\n",
+					var_to_num(down_i[x], down_j[x], n),
+					var_to_num(down_i[y], down_j[y], n));
+				clauses++;
+			}
 		}
 	}
 
-	// 写出缓冲并回写 header（必须与占位时格式完全相同）
-	if (fflush(fp) != 0 || ferror(fp)) { fclose(fp); return false; }
+	//信息行写入
+	fflush(fp);
 	fseek(fp, 0, SEEK_SET);
-	if (fprintf(fp, "p cnf %d %10d\n", VAR_NUM, clauses) < 0) { fclose(fp); return false; }
-
+	fprintf(fp, "p cnf %d %10d\n", VAR_NUM, clauses);
 	fclose(fp);
 	return true;
 }
 
-//调用dpll求解cnf_path下的数独，var_count为总变元数，model用来存储cnf公式的解
-bool sudoku_solver(const char* cnf_path, int var_count, int* model)
+//调用dpll求解cnf_path下的百分号数独，var_count为总变元数，model用来存储cnf公式的解
+bool xsudoku_solver(const char* cnf_path, int var_count, int* model)
 {
 	formula* F = parse_cnf(cnf_path);
 	if (!F) return false;
@@ -121,8 +171,8 @@ bool sudoku_solver(const char* cnf_path, int var_count, int* model)
 	for (int i = 1; i <= var_count; i++) model[i] = A.values[i];
 	return true;
 }
-//从model（1到var_count）中提取出数独的解，写入grid_res（1到var_count）中
-bool sudoku_model_to_grid(const int* model, int var_count, char* grid_res)
+//从model（1到var_count）中提取出百分号数独的解，写入grid_res（1到var_count）中
+bool xsudoku_model_to_grid(const int* model, int var_count, char* grid_res)
 {
 	if (!model || !grid_res) return false;
 	memset(grid_res, '.', SUDOKU_LENGTH);
@@ -137,8 +187,8 @@ bool sudoku_model_to_grid(const int* model, int var_count, char* grid_res)
 	grid_res[SUDOKU_LENGTH] = '\0';
 	return true;
 }
-//从字符串grid_res中打印数独
-void sudoku_print(const char* grid_res)
+//从字符串grid_res中打印百分号数独
+void xsudoku_print(const char* grid_res)
 {
 	for (int i = 0; i < 9; i++) {
 		for (int j = 0; j < 9; j++) {
@@ -149,39 +199,38 @@ void sudoku_print(const char* grid_res)
 	}
 }
 
-//从一个字符串sudoku_str求解普通数独
-bool sudoku_solve_from_string(const char* sudoku_str)
+//从一个字符串xsudoku_str求解百分号数独
+bool xsudoku_solve_from_string(const char* xsudoku_str)
 {
 	int model[VAR_NUM + 1];
-	if (sudoku_to_cnf(sudoku_str, "sudoku_cnf.cnf") == false) {
+	if (xsudoku_to_cnf(xsudoku_str, "xsudoku_cnf.cnf") == false) {
 		printf("无法生成CNF文件\n");
 		return false;
 	}
-	bool SAT = sudoku_solver("sudoku_cnf.cnf", VAR_NUM, model);
+	bool SAT = xsudoku_solver("xsudoku_cnf.cnf", VAR_NUM, model);
 	if (!SAT) {
-		printf("数独无结果\n\n");
+		printf("数独无结果\n");
 		return false;
 	}
 	char grid_res[SUDOKU_LENGTH + 1];
-	sudoku_model_to_grid(model, VAR_NUM, grid_res);
-	sudoku_print(grid_res);
+	xsudoku_model_to_grid(model, VAR_NUM, grid_res);
+	xsudoku_print(grid_res);
 	return true;
 }
-
-//从文本文件中逐行读取多个普通数独，批量求解并打印，返回成功求解的个数
-int sudoku_solve_from_file(const char* sudoku_file)
+//从文本文件中逐行读取多个百分号数独，批量求解并打印，返回成功求解的个数
+int xsudoku_solve_from_file(const char* xsudoku_file)
 {
-	FILE* fp = fopen(sudoku_file, "rb");
+	FILE* fp = fopen(xsudoku_file, "rb");
 	if (!fp) return -1;
 	char line[SUDOKU_LENGTH + 11]; //多留10个字节的缓冲区余量
 	int count = 0;
 	while (fgets(line, sizeof(line), fp)) {
 		if (line[0] == '/' && line[1] == '/') continue;
 		if (strlen(line) < SUDOKU_LENGTH) continue;
-		char sudoku_str[SUDOKU_LENGTH + 1];
-		memcpy(sudoku_str, line, SUDOKU_LENGTH);
-		sudoku_str[SUDOKU_LENGTH] = '\0';
-		if (sudoku_solve_from_string(sudoku_str) == true) count++;
+		char xsudoku_str[SUDOKU_LENGTH + 1];
+		memcpy(xsudoku_str, line, SUDOKU_LENGTH);
+		xsudoku_str[SUDOKU_LENGTH] = '\0';
+		if (xsudoku_solve_from_string(xsudoku_str) == true) count++;
 		printf("\n");
 	}
 	fclose(fp);
@@ -189,7 +238,7 @@ int sudoku_solve_from_file(const char* sudoku_file)
 }
 
 //普通九宫格合法性检查
-static bool ok(int row, int col, int num) 
+static bool ok(int row, int col, int num)
 {
 	for (int k = 0; k < N; k++)
 		if (full[row][k] == num || full[k][col] == num) return false;
@@ -199,7 +248,6 @@ static bool ok(int row, int col, int num)
 			if (full[i][j] == num) return false;
 	return true;
 }
-
 //百分号数独额外约束区域
 static const int diag_i[9] = { 0,1,2,3,4,5,6,7,8 };
 static const int diag_j[9] = { 8,7,6,5,4,3,2,1,0 };
@@ -209,7 +257,7 @@ static const int dn_i[9] = { 5,5,5,6,6,6,7,7,7 };
 static const int dn_j[9] = { 5,6,7,5,6,7,5,6,7 };
 
 //检查百分号数独合法性（含行/列/宫/撇对角/上下窗口）
-static bool ok_percent(int r, int c, int num) 
+static bool ok_percent(int r, int c, int num)
 {
 	if (!ok(r, c, num)) return false;
 	//撇对角线
@@ -232,9 +280,8 @@ static bool ok_percent(int r, int c, int num)
 		}
 	return true;
 }
-
-//回溯填满普通数独
-static bool fill_grid(int idx) 
+//回溯填满百分号数独
+static bool fill_percent(int idx)
 {
 	if (idx == N * N) return true;
 	int r = idx / N, c = idx % N;
@@ -245,9 +292,9 @@ static bool fill_grid(int idx)
 		int t = nums[i]; nums[i] = nums[j]; nums[j] = t;
 	}
 	for (int k = 0; k < N; k++) {
-		if (ok(r, c, nums[k])) {
+		if (ok_percent(r, c, nums[k])) {
 			full[r][c] = nums[k];
-			if (fill_grid(idx + 1)) return true;
+			if (fill_percent(idx + 1)) return true;
 		}
 	}
 	full[r][c] = 0;
@@ -267,24 +314,24 @@ static void dig_holes(int holes)
 }
 
 // 难度→挖洞数映射
-static int holes_for_diff(int diff) 
+static int holes_for_diff(int diff)
 {
 	switch (diff) {
-		case 1: return 45;
-		case 2: return 50;
-		case 3: return 55;
-		default: return 50;
+	case 1: return 45;
+	case 2: return 50;
+	case 3: return 55;
+	default: return 50;
 	}
 }
 
-void generate_random_sudoku(int difficulty, char* sudoku_str) 
+void generate_random_xsudoku(int difficulty, char* xsudoku_str)
 {
-	srand((unsigned)time(NULL));
+	srand((unsigned)time(NULL) + 12345);
 	memset(full, 0, sizeof full);
-	fill_grid(0);
+	fill_percent(0);
 	dig_holes(holes_for_diff(difficulty));
 	for (int i = 0; i < N; i++)
 		for (int j = 0; j < N; j++)
-			sudoku_str[i * 9 + j] = full[i][j] ? '0' + full[i][j] : '_';
-	sudoku_str[81] = '\0';
+			xsudoku_str[i * 9 + j] = full[i][j] ? '0' + full[i][j] : '_';
+	xsudoku_str[81] = '\0';
 }
